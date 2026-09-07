@@ -1,0 +1,88 @@
+# ============================================================
+# .gitignore — modbus_tcp_demo
+# 按"嵌入式 / C / C++ / Python / IDE"常见产物配置。
+# 如需把固件（.hex/.bin）或可执行文件随仓库发布，删除对应行即可。
+# ============================================================
+
+# ---------- 构建产物 ----------
+build/
+bin/
+obj/
+out/
+Debug/
+Release/
+x64/
+x86/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+*.elf
+*.hex
+*.map
+*.pdb
+*.ilk
+*.exp
+*.suo
+
+# ---------- CMake 生成文件 ----------
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+
+# ---------- Qt（如用 Qt 做上位机界面） ----------
+*.pro.user
+*.qmake.stash
+.qmake.stash
+
+# ---------- Python（如 demo 用 Python 实现） ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ---------- IDE / 编辑器 ----------
+.idea/
+*.iml
+.vscode/
+.vs/
+*.user
+*.suo
+.project
+.classpath
+.settings/
+*.code-workspace
+
+# ---------- 日志与临时文件 ----------
+*.log
+*.tmp
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 敏感信息（绝不入库） ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------- 抓包 / 现场数据 ----------
+*.pcap
+*.pcapng
