@@ -5,10 +5,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-# ---- 仅 Qt5（SerialBus 模块提供 QModbusTcpClient）----
+# ---- 仅 Qt5 ----
+# SerialBus 模块提供 QModbusTcpClient；Sql 模块提供 QSqlDatabase（报警日志 SQLite）。
 # 最低 5.11：QModbusDevice::errorOccurred 信号自 5.11 引入；
 # 建议 5.12 LTS 及以上（errorOccurred/State 枚举均已具备）。
-find_package(Qt5 5.11 COMPONENTS Core Widgets SerialBus REQUIRED)
+
+# 未配置 CMAKE_PREFIX_PATH 时，用 $HOME 兜底（用户可随时覆盖）
+if(NOT CMAKE_PREFIX_PATH)
+    set(CMAKE_PREFIX_PATH "$ENV{HOME}/Qt/5.15.2/gcc_64")
+endif()
+
+find_package(Qt5 5.11 COMPONENTS Core Widgets SerialBus Sql REQUIRED)
 
 # =====================================================================
 # 产物分类输出：最终产物按类别分目录，全部集中在 build/ 下
@@ -36,7 +43,7 @@ set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb")
 # Debug 版可执行/库加 "_d" 后缀，便于区分版本：
 #   modbus_tcp_demo      (Release)
 #   modbus_tcp_demod     (Debug)
-#set(CMAKE_DEBUG_POSTFIX "d")
+# set(CMAKE_DEBUG_POSTFIX "d")
 
 # 【若用多配置生成器(VS/Xcode)，把上面 5 行替换为：】
 # foreach(cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
@@ -50,11 +57,13 @@ add_executable(modbus_tcp_demo
     src/main.cpp
     src/modbusmanager.cpp
     src/modbusmanager.h
+    src/alarmlogger.cpp
+    src/alarmlogger.h
     src/mainwindow.cpp
     src/mainwindow.h
 )
 
-target_link_libraries(modbus_tcp_demo PRIVATE Qt5::Core Qt5::Widgets Qt5::SerialBus)
+target_link_libraries(modbus_tcp_demo PRIVATE Qt5::Core Qt5::Widgets Qt5::SerialBus Qt5::Sql)
 
 # =====================================================================
 # 安装规则（可选）：cmake --install build --prefix <dir>

@@ -38,7 +38,7 @@ BIN="$INSTALL_PREFIX/bin/modbus_tcp_demo"
 # 改代码后直接 ./run.sh 即自动生效，无需手动删旧二进制。
 echo "== 配置 =="
 echo "CMAKE_INSTALL_PREFIX=$INSTALL_PREFIX | LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-cmake -B build -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX"
+cmake -B build -G Ninja -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX"
 echo "== 构建 =="
 cmake --build build -j
 echo "== 覆盖安装到 $BIN =="
