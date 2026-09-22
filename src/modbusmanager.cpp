@@ -84,7 +84,7 @@ void ModbusManager::start()
     m_userStopped = false;
     m_reconnectAttempts = 0;
     if (!m_sweepTimer.isActive())
-        m_sweepTimer.start();   // stop() 停掉后，start() 需重启清扫
+        m_sweepTimer.start(); // stop() 停掉后，start() 需重启清扫
     emit logMessage(QStringLiteral("[mgr] start, target %1:%2").arg(m_host).arg(m_port));
     connectDevice();
 }
@@ -97,7 +97,7 @@ void ModbusManager::stop()
     m_heartbeatTimer.stop();
     m_sweepTimer.stop();
     if (m_client->state() != QModbusDevice::UnconnectedState)
-        m_client->disconnectDevice();   // 会触发 stateChanged -> Unconnected（不重连，因为 userStopped）
+        m_client->disconnectDevice(); // 会触发 stateChanged -> Unconnected（不重连，因为 userStopped）
     flushQueue(QStringLiteral("stopped"));
     emit logMessage(QStringLiteral("[mgr] stopped"));
 }
@@ -117,13 +117,16 @@ quint64 ModbusManager::enqueueRead(QModbusDataUnit::RegisterType type,
                                    int serverAddress,
                                    std::function<void(bool, const QVector<quint16> &)> cb)
 {
-    if (m_userStopped) {
-        if (cb) cb(false, {});
+    // 入队失败（已停止 / 队列满）：直接返回 0，不调 cb。
+    // 调用方根据返回值 == 0 自行计数失败——这样 UI 侧 busy 计数不会因为
+    // "没 ++ 却 --" 而无符号下溢。
+    if (m_userStopped)
+    {
         return 0;
     }
-    if (m_pending.size() >= m_queueLimit) {
+    if (m_pending.size() >= m_queueLimit)
+    {
         emit logMessage(QStringLiteral("[queue] full (%1), request rejected").arg(m_queueLimit));
-        if (cb) cb(false, {});
         return 0;
     }
 
@@ -143,6 +146,18 @@ quint64 ModbusManager::enqueueRead(QModbusDataUnit::RegisterType type,
 }
 
 // ---------------------------------------------------------------------
+// 业务语义接口：读保持寄存器（第四周：把 Modbus 枚举概念封在通信层内）
+// ---------------------------------------------------------------------
+quint64 ModbusManager::enqueueReadHolding(int startAddress, int count,
+                                          int serverAddress,
+                                          std::function<void(bool, const QVector<quint16> &)> cb)
+{
+    // QModbusDataUnit::HoldingRegisters 只在这里出现 —— UI 层看不到这个概念
+    return enqueueRead(QModbusDataUnit::HoldingRegisters,
+                       startAddress, count, serverAddress, std::move(cb));
+}
+
+// ---------------------------------------------------------------------
 // 队列调度核心
 // ---------------------------------------------------------------------
 void ModbusManager::pumpQueue()
@@ -151,14 +166,17 @@ void ModbusManager::pumpQueue()
         return; // 未连接不发送，等重连成功后再调度
 
     // 只在并发槽有空位时发
-    while (m_inflight.size() < m_maxConcurrent && !m_pending.isEmpty()) {
+    while (m_inflight.size() < m_maxConcurrent && !m_pending.isEmpty())
+    {
         ModbusRequestItem item = m_pending.dequeue();
-        if (item.deadlineMs <= m_elapsed.elapsed()) {
+        if (item.deadlineMs <= m_elapsed.elapsed())
+        {
             // 排到队头时已过期 → 丢弃（不发送）
             notifyFail(item, QStringLiteral("stale before send"));
             continue;
         }
-        if (!sendItem(item)) {
+        if (!sendItem(item))
+        {
             // 发送失败（多半是连接刚断），放回队尾稍后再试
             m_pending.enqueue(item);
             break;
@@ -170,7 +188,8 @@ bool ModbusManager::sendItem(const ModbusRequestItem &item)
 {
     QModbusDataUnit unit(item.type, item.startAddress, static_cast<quint16>(item.count));
     QModbusReply *reply = m_client->sendReadRequest(unit, item.serverAddress);
-    if (!reply) {
+    if (!reply)
+    {
         emit logMessage(QStringLiteral("[req #%1] send failed (no reply)").arg(item.seq));
         return false;
     }
@@ -181,9 +200,8 @@ bool ModbusManager::sendItem(const ModbusRequestItem &item)
     m_inflight.insert(item.seq, entry);
     m_replySeq.insert(reply, item.seq);
 
-    connect(reply, &QModbusReply::finished, this, [this, reply]() {
-        processReply(reply);
-    });
+    connect(reply, &QModbusReply::finished, this, [this, reply]()
+            { processReply(reply); });
     return true;
 }
 
@@ -193,14 +211,16 @@ bool ModbusManager::sendItem(const ModbusRequestItem &item)
 void ModbusManager::processReply(QModbusReply *reply)
 {
     quint64 seq = m_replySeq.take(reply);
-    if (seq == 0) {
+    if (seq == 0)
+    {
         // 该 reply 已被超时/断线清理过，忽略
         reply->deleteLater();
         return;
     }
 
     auto it = m_inflight.find(seq);
-    if (it == m_inflight.end()) {
+    if (it == m_inflight.end())
+    {
         reply->deleteLater();
         return;
     }
@@ -209,18 +229,22 @@ void ModbusManager::processReply(QModbusReply *reply)
 
     const bool ok = (reply->error() == QModbusDevice::NoError);
     QVector<quint16> values;
-    if (ok) {
+    if (ok)
+    {
         const QModbusDataUnit result = reply->result();
         values.reserve(result.valueCount());
         for (int i = 0; i < result.valueCount(); ++i)
             values.append(static_cast<quint16>(result.value(i)));
     }
 
-    if (item.isHeartbeat) {
+    if (item.isHeartbeat)
+    {
         handleHeartbeatResult(ok);
         if (ok)
             emit logMessage(QStringLiteral("[heartbeat] ok"));
-    } else {
+    }
+    else
+    {
         emit logMessage(QStringLiteral("[req #%1] done ok=%2").arg(item.seq).arg(ok));
     }
 
@@ -232,7 +256,7 @@ void ModbusManager::processReply(QModbusReply *reply)
         emit dataReady(item.startAddress, values);
 
     reply->deleteLater();
-    pumpQueue();   // 腾出并发槽，继续调度
+    pumpQueue(); // 腾出并发槽，继续调度
 }
 
 // ---------------------------------------------------------------------
@@ -262,21 +286,24 @@ void ModbusManager::enqueueHeartbeat()
     item.deadlineMs = m_elapsed.elapsed() + m_responseTimeoutMs + 1000;
     item.seq = m_nextSeq++;
     item.isHeartbeat = true;
-    m_pending.prepend(item);   // 心跳优先（插队）
+    m_pending.prepend(item); // 心跳优先（插队）
     pumpQueue();
 }
 
 void ModbusManager::handleHeartbeatResult(bool ok)
 {
     m_heartbeatInFlight = false;
-    if (ok) {
+    if (ok)
+    {
         m_heartbeatFailCount = 0;
         return;
     }
     m_heartbeatFailCount++;
     emit logMessage(QStringLiteral("[heartbeat] fail %1/%2")
-                        .arg(m_heartbeatFailCount).arg(m_heartbeatMaxFails));
-    if (m_heartbeatFailCount >= m_heartbeatMaxFails) {
+                        .arg(m_heartbeatFailCount)
+                        .arg(m_heartbeatMaxFails));
+    if (m_heartbeatFailCount >= m_heartbeatMaxFails)
+    {
         m_heartbeatFailCount = 0;
         emit heartbeatLost();
         emit logMessage(QStringLiteral("[heartbeat] LOST -> force reconnect"));
@@ -298,13 +325,16 @@ void ModbusManager::onSweepTimeout()
 
     // 1) 在途请求超时 → 取消（reply 后续到达会被 processReply 判 seq==0 忽略）
     QList<quint64> stale;
-    for (auto it = m_inflight.cbegin(); it != m_inflight.cend(); ++it) {
+    for (auto it = m_inflight.cbegin(); it != m_inflight.cend(); ++it)
+    {
         if (it->item.deadlineMs <= now)
             stale.append(it.key());
     }
-    for (quint64 seq : stale) {
+    for (quint64 seq : stale)
+    {
         auto entry = m_inflight.take(seq);
-        if (entry.reply) {
+        if (entry.reply)
+        {
             m_replySeq.remove(entry.reply);
             entry.reply->deleteLater();
         }
@@ -312,7 +342,8 @@ void ModbusManager::onSweepTimeout()
     }
 
     // 2) 队首过期 → 丢弃
-    while (!m_pending.isEmpty() && m_pending.head().deadlineMs <= now) {
+    while (!m_pending.isEmpty() && m_pending.head().deadlineMs <= now)
+    {
         ModbusRequestItem item = m_pending.dequeue();
         notifyFail(item, QStringLiteral("stale"));
     }
@@ -325,9 +356,12 @@ void ModbusManager::onSweepTimeout()
 // ---------------------------------------------------------------------
 void ModbusManager::notifyFail(const ModbusRequestItem &item, const QString &reason)
 {
-    if (item.isHeartbeat) {
-        handleHeartbeatResult(false);   // 心跳失败累计 + 可能触发强制重连
-    } else {
+    if (item.isHeartbeat)
+    {
+        handleHeartbeatResult(false); // 心跳失败累计 + 可能触发强制重连
+    }
+    else
+    {
         emit logMessage(QStringLiteral("[req #%1] dropped: %2").arg(item.seq).arg(reason));
     }
     if (item.callback)
@@ -339,14 +373,17 @@ void ModbusManager::notifyFail(const ModbusRequestItem &item, const QString &rea
 // ---------------------------------------------------------------------
 void ModbusManager::flushQueue(const QString &reason)
 {
-    while (!m_pending.isEmpty()) {
+    while (!m_pending.isEmpty())
+    {
         ModbusRequestItem item = m_pending.dequeue();
         notifyFail(item, reason);
     }
     QList<quint64> keys = m_inflight.keys();
-    for (quint64 seq : keys) {
+    for (quint64 seq : keys)
+    {
         InflightEntry entry = m_inflight.take(seq);
-        if (entry.reply) {
+        if (entry.reply)
+        {
             m_replySeq.remove(entry.reply);
             entry.reply->deleteLater();
         }
@@ -372,29 +409,33 @@ void ModbusManager::connectDevice()
         m_client->disconnectDevice();
 
     m_client->connectDevice();
-    m_connectGuard.start(m_connectGuardMs);   // 建连超时兜底
+    m_connectGuard.start(m_connectGuardMs); // 建连超时兜底
     emit logMessage(QStringLiteral("[mgr] connecting %1:%2 ...").arg(m_host).arg(m_port));
 }
 
 void ModbusManager::onClientStateChanged(QModbusDevice::State state)
 {
     m_deviceState = state;
-    switch (state) {
+    switch (state)
+    {
     case QModbusDevice::ConnectedState:
         m_connectGuard.stop();
-        m_reconnectAttempts = 0;              // 退避重置
+        m_reconnectAttempts = 0; // 退避重置
         emit stateChanged(QStringLiteral("connected"));
         emit logMessage(QStringLiteral("[mgr] CONNECTED"));
         m_heartbeatTimer.start(m_heartbeatIntervalMs);
-        pumpQueue();                          // 把积压请求发出去
+        pumpQueue(); // 把积压请求发出去
         break;
     case QModbusDevice::UnconnectedState:
         m_connectGuard.stop();
         m_heartbeatTimer.stop();
         emit stateChanged(QStringLiteral("unconnected"));
-        if (m_userStopped) {
+        if (m_userStopped)
+        {
             flushQueue(QStringLiteral("stopped"));
-        } else {
+        }
+        else
+        {
             emit logMessage(QStringLiteral("[mgr] connection lost"));
             flushQueue(QStringLiteral("connection lost"));
             scheduleReconnect();
@@ -409,15 +450,32 @@ void ModbusManager::onClientStateChanged(QModbusDevice::State state)
 void ModbusManager::onClientErrorOccurred(QModbusDevice::Error error)
 {
     QString s;
-    switch (error) {
-    case QModbusDevice::NoError:           s = QStringLiteral("NoError"); break;
-    case QModbusDevice::ReadError:         s = QStringLiteral("ReadError"); break;
-    case QModbusDevice::WriteError:        s = QStringLiteral("WriteError"); break;
-    case QModbusDevice::ConnectionError:   s = QStringLiteral("ConnectionError"); break;
-    case QModbusDevice::ConfigurationError:s = QStringLiteral("ConfigurationError"); break;
-    case QModbusDevice::TimeoutError:      s = QStringLiteral("TimeoutError"); break;
-    case QModbusDevice::ProtocolError:     s = QStringLiteral("ProtocolError"); break;
-    default:                               s = QStringLiteral("UnknownError"); break;
+    switch (error)
+    {
+    case QModbusDevice::NoError:
+        s = QStringLiteral("NoError");
+        break;
+    case QModbusDevice::ReadError:
+        s = QStringLiteral("ReadError");
+        break;
+    case QModbusDevice::WriteError:
+        s = QStringLiteral("WriteError");
+        break;
+    case QModbusDevice::ConnectionError:
+        s = QStringLiteral("ConnectionError");
+        break;
+    case QModbusDevice::ConfigurationError:
+        s = QStringLiteral("ConfigurationError");
+        break;
+    case QModbusDevice::TimeoutError:
+        s = QStringLiteral("TimeoutError");
+        break;
+    case QModbusDevice::ProtocolError:
+        s = QStringLiteral("ProtocolError");
+        break;
+    default:
+        s = QStringLiteral("UnknownError");
+        break;
     }
     emit errorOccurred(s);
     emit logMessage(QStringLiteral("[mgr] client error: %1").arg(s));
@@ -428,13 +486,14 @@ void ModbusManager::scheduleReconnect()
     if (m_userStopped)
         return;
 
-    m_reconnectTimer.stop();   // 幂等：避免双调度
+    m_reconnectTimer.stop(); // 幂等：避免双调度
     m_reconnectAttempts++;
     // 指数退避：base << (attempts-1)，封顶 max；attempts 太大时按 12 封顶位移
     const int shift = qMin(m_reconnectAttempts - 1, 12);
     const qint64 delay = qMin<qint64>(qint64(m_reconnectBaseMs) << shift, m_reconnectMaxMs);
     emit logMessage(QStringLiteral("[mgr] schedule reconnect in %1 ms (attempt %2)")
-                        .arg(delay).arg(m_reconnectAttempts));
+                        .arg(delay)
+                        .arg(m_reconnectAttempts));
     m_reconnectTimer.start(int(delay));
 }
 
@@ -454,7 +513,7 @@ void ModbusManager::onConnectGuardTimeout()
     if (m_deviceState == QModbusDevice::ConnectedState)
         return;
     emit logMessage(QStringLiteral("[mgr] connect timeout, abort & retry"));
-    m_client->disconnectDevice();   // 触发 Unconnected -> scheduleReconnect（指数退避）
+    m_client->disconnectDevice(); // 触发 Unconnected -> scheduleReconnect（指数退避）
 }
 
 // ---------------------------------------------------------------------
@@ -473,12 +532,12 @@ void ModbusManager::simulateBadPort()
         return;
     m_badPortSim = true;
     emit logMessage(QStringLiteral("[sim] switch to BAD port -> simulate PLC offline"));
-    m_port = static_cast<quint16>(m_goodPort + 1);   // 指向错误端口
+    m_port = static_cast<quint16>(m_goodPort + 1); // 指向错误端口
     m_reconnectTimer.stop();
     m_heartbeatTimer.stop();
     if (m_client->state() != QModbusDevice::UnconnectedState)
         m_client->disconnectDevice();
-    scheduleReconnect();   // 重连会一直失败 → 观察退避
+    scheduleReconnect(); // 重连会一直失败 → 观察退避
 }
 
 void ModbusManager::restoreGoodPort()
@@ -489,5 +548,5 @@ void ModbusManager::restoreGoodPort()
     emit logMessage(QStringLiteral("[sim] restore GOOD port"));
     m_port = m_goodPort;
     m_reconnectTimer.stop();
-    scheduleReconnect();   // 重连应恢复成功
+    scheduleReconnect(); // 重连应恢复成功
 }
