@@ -9,14 +9,20 @@
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-09-22
+
 ### 新增
-- （待填写）
+- 通信层新增业务语义接口 enqueueReadHolding(startAddress, count, serverAddress, cb)
+- main 注释补第四周验收目标（解耦三条）
 
 ### 修复
-- （待填写）
+- UI层`onStressClicked` 里 `seq==0` 时手动 `++m_failCount`
+- 通信层 入队失败（userStopped / 队列满）时**不再同步调 cb**，直接返回 0
 
 ### 变更
-- （待填写）
+- UI层`onStressClicked` 压测改为 `m_mgr->enqueueReadHolding(addr, 2, 1, cb)`，UI 不再碰寄存器类型
+- 通信层实现：内部转发 `enqueueRead(QModbusDataUnit::HoldingRegisters, ...)`——**Modbus 枚举只在通信层出现一次**
+- 通信层更新注释："返回 0 = 入队失败，不调 cb；返回非 0 = 回调一定会被调"
 
 ## [v1.3.0] - 2026-09-11
 
