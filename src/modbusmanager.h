@@ -35,14 +35,15 @@
 // ---------------------------------------------------------------------
 // 一个排队请求的封装
 // ---------------------------------------------------------------------
-struct ModbusRequestItem {
+struct ModbusRequestItem
+{
     QModbusDataUnit::RegisterType type = QModbusDataUnit::HoldingRegisters;
-    int startAddress = 0;                 // 起始偏移
-    int count = 1;                        // 寄存器个数
-    int serverAddress = 1;                // 单元 ID / 从站地址
-    qint64 deadlineMs = 0;                // 绝对过期时刻（相对 m_elapsed）
-    quint64 seq = 0;                      // 全局递增序号（防错配/调试）
-    bool isHeartbeat = false;             // 是否心跳请求
+    int startAddress = 0;     // 起始偏移
+    int count = 1;            // 寄存器个数
+    int serverAddress = 1;    // 单元 ID / 从站地址
+    qint64 deadlineMs = 0;    // 绝对过期时刻（相对 m_elapsed）
+    quint64 seq = 0;          // 全局递增序号（防错配/调试）
+    bool isHeartbeat = false; // 是否心跳请求
     std::function<void(bool ok, const QVector<quint16> &values)> callback;
 };
 
@@ -57,56 +58,65 @@ public:
     void setServer(const QString &host, quint16 port);
     void setHeartbeatParams(int intervalMs, int maxFails);
     void setQueueParams(int maxConcurrent, int queueLimit);
-    void setResponseTimeout(int ms);      // 单次请求响应超时（给底层）
+    void setResponseTimeout(int ms); // 单次请求响应超时（给底层）
     void setReconnectParams(int baseMs, int maxMs);
 
     // ---- 控制 ----
-    void start();                          // 启动连接（内部自动开始心跳/重连/清理）
-    void stop();                           // 停止（用户主动，不触发重连）
-    void reconnectNow();                   // 立即重连一次（手动）
+    void start();        // 启动连接（内部自动开始心跳/重连/清理）
+    void stop();         // 停止（用户主动，不触发重连）
+    void reconnectNow(); // 立即重连一次（手动）
 
-    // ---- 通用读请求（业务方唯一入口）----
-    // 返回 seq；失败（队列满）返回 0。cb 在完成/失败/超时/被丢弃时都会以 ok=false 触发。
+    // ---- 通用读请求（底层入口：UI/业务方一般不直接用，见下方业务语义接口）----
+    // 返回 seq（非 0）= 入队成功，cb 一定会在完成/失败/超时/被丢弃时以 ok=false 触发。
+    // 返回 0 = 入队失败（已停止 / 队列满），**不会调 cb**，调用方根据返回值自行计数。
     quint64 enqueueRead(QModbusDataUnit::RegisterType type,
                         int startAddress, int count, int serverAddress = 1,
                         std::function<void(bool, const QVector<quint16> &)> cb = nullptr);
 
+    // ---- 业务语义读接口（第四周解耦：UI 不接触 QModbus 寄存器类型枚举）----
+    // 读【保持寄存器】。UI 只传地址/数量，HoldingRegisters 这个 Modbus 概念藏在通信层内部。
+    // 换协议（如 OPC-UA）时只改本类，UI 零改动。
+    quint64 enqueueReadHolding(int startAddress, int count,
+                               int serverAddress = 1,
+                               std::function<void(bool, const QVector<quint16> &)> cb = nullptr);
+
     // ---- 模拟故障（供 UI/测试触发，验收"反复开关从站不崩"）----
-    void simulateNetworkDrop();            // 模拟网络闪断：直接断开
-    void simulateBadPort();                // 模拟 PLC 离线：切到错误端口（重连必失败）
-    void restoreGoodPort();                // 恢复正确端口
+    void simulateNetworkDrop(); // 模拟网络闪断：直接断开
+    void simulateBadPort();     // 模拟 PLC 离线：切到错误端口（重连必失败）
+    void restoreGoodPort();     // 恢复正确端口
 
     // 状态查询
     bool isConnected() const { return m_deviceState == QModbusDevice::ConnectedState; }
-    int  pendingCount() const { return m_pending.size() + m_inflight.size(); }
+    int pendingCount() const { return m_pending.size() + m_inflight.size(); }
 
 signals:
-    void stateChanged(const QString &state);                       // connected / connecting / unconnected
-    void logMessage(const QString &msg);                           // 全部日志，UI 直接接
-    void errorOccurred(const QString &err);                        // 底层错误
+    void stateChanged(const QString &state);                          // connected / connecting / unconnected
+    void logMessage(const QString &msg);                              // 全部日志，UI 直接接
+    void errorOccurred(const QString &err);                           // 底层错误
     void dataReady(int startAddress, const QVector<quint16> &values); // 成功读到的业务数据
-    void heartbeatLost();                                          // 心跳连续失败（链路已死）
+    void heartbeatLost();                                             // 心跳连续失败（链路已死）
 
 private slots:
     void onClientStateChanged(QModbusDevice::State state);
     void onClientErrorOccurred(QModbusDevice::Error error);
-    void onSweepTimeout();                 // 周期清理：超时请求 / 过期队列
-    void onHeartbeatTimeout();             // 周期发心跳
-    void onReconnectTimeout();             // 退避到期，尝试重连
-    void onConnectGuardTimeout();          // 连接建立超时守卫
+    void onSweepTimeout();        // 周期清理：超时请求 / 过期队列
+    void onHeartbeatTimeout();    // 周期发心跳
+    void onReconnectTimeout();    // 退避到期，尝试重连
+    void onConnectGuardTimeout(); // 连接建立超时守卫
 
 private:
-    struct InflightEntry {
+    struct InflightEntry
+    {
         ModbusRequestItem item;
         QPointer<QModbusReply> reply;
     };
 
     void connectDevice();
     void scheduleReconnect();
-    void pumpQueue();                      // 队列调度核心（并发限制）
+    void pumpQueue(); // 队列调度核心（并发限制）
     bool sendItem(const ModbusRequestItem &item);
     void processReply(QModbusReply *reply);
-    void flushQueue(const QString &reason);// 断线/停止时收尾所有请求
+    void flushQueue(const QString &reason); // 断线/停止时收尾所有请求
     void notifyFail(const ModbusRequestItem &item, const QString &reason);
     void enqueueHeartbeat();
     void handleHeartbeatResult(bool ok);
@@ -120,11 +130,11 @@ private:
     bool m_badPortSim = false;
 
     // --- 队列 ---
-    QQueue<ModbusRequestItem> m_pending;                 // 待发
-    QHash<quint64, InflightEntry> m_inflight;            // 在途（按 seq）
-    QHash<QModbusReply *, quint64> m_replySeq;           // reply -> seq
-    int m_maxConcurrent = 1;                             // 并发上限（默认 1，最稳）
-    int m_queueLimit = 200;                              // 队列上限，防内存暴涨
+    QQueue<ModbusRequestItem> m_pending;       // 待发
+    QHash<quint64, InflightEntry> m_inflight;  // 在途（按 seq）
+    QHash<QModbusReply *, quint64> m_replySeq; // reply -> seq
+    int m_maxConcurrent = 1;                   // 并发上限（默认 1，最稳）
+    int m_queueLimit = 200;                    // 队列上限，防内存暴涨
     quint64 m_nextSeq = 1;
 
     // --- 心跳 ---
@@ -141,16 +151,16 @@ private:
     int m_reconnectMaxMs = 30000;
 
     // --- 超时 ---
-    QTimer m_sweepTimer;                   // 200ms 清扫
-    int m_responseTimeoutMs = 1500;        // 单请求响应超时
+    QTimer m_sweepTimer;            // 200ms 清扫
+    int m_responseTimeoutMs = 1500; // 单请求响应超时
     QTimer m_connectGuard;
-    int m_connectGuardMs = 3000;           // 建连超时守卫
+    int m_connectGuardMs = 3000; // 建连超时守卫
 
     // --- 状态 ---
     QModbusDevice::State m_deviceState = QModbusDevice::UnconnectedState;
     bool m_userStopped = false;
 
-    QElapsedTimer m_elapsed;               // 全局时间基准（deadline 用它计算）
+    QElapsedTimer m_elapsed; // 全局时间基准（deadline 用它计算）
 };
 
 #endif // MODBUSMANAGER_H
