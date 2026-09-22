@@ -229,18 +229,20 @@ void MainWindow::onStressClicked()
     for (int i = 0; i < 500; ++i)
     {
         const int addr = (i % 100) * 2;
-        const quint64 seq = m_mgr->enqueueRead(
-            QModbusDataUnit::HoldingRegisters, addr, 2, 1,
+        const quint64 seq = m_mgr->enqueueReadHolding(
+            addr, 2, 1,
             [this](bool ok, const QVector<quint16> &)
             {
                 if (ok)
                     ++m_okCount;
                 else
                     ++m_failCount;
-                --m_busyReqCount;
+                --m_busyReqCount; // 只有真入队成功的请求才会走到这里（seq!=0 才 ++）
             });
         if (seq != 0)
             ++m_busyReqCount;
+        else
+            ++m_failCount; // 队列满 / 已停止：入队失败，手动计数（Manager 不再同步调 cb）
     }
     appendLog(QStringLiteral("[UI] stress done, accepted=%1 (overflow auto-rejected)").arg(m_busyReqCount));
 }
