@@ -1,6 +1,7 @@
 # Modbus TCP 主站 Demo —— 心跳 / 断线检测 / 自动重连 / 请求队列 + 报警日志 SQLite
 
 一个生产级思路的 Qt Modbus TCP 主站封装 + HMI 报警日志 SQLite 可靠存储，含 UI 测试入口。
+（第 4 周迭代：解耦强化 / busy 下溢修复 / 多选确认 / 断电恢复强化验收）
 
 ---
 
@@ -236,7 +237,75 @@ cmake --build build -j
 
 ---
 
-## 八、文件结构
+## 八、第4周：解耦强化 / busy 下溢修复 / 多选确认 / 断电恢复强化验收
+
+### 8.1 功能对照（第4周新增 / 修改）
+
+| 需求 | 实现位置 | 说明 |
+|---|---|---|
+| 解耦强化（任务1） | UI 只通过信号/槽与通信层交互 | UI 层不感知任何 Modbus 概念（功能码/寄存器/从站地址），只发"读/写"意图、收数据/错误信号；`MainWindow` 可直接删除 |
+| 压测 busy 计数下溢修复 | `onStressClicked()` 回调计数 | 修复 `quint64` busy 计数下溢：队列满拒绝时回调仍被触发但未递增 → busy 显示 18446744073709551615 |
+| 确认选中支持多选 | `onAckClicked()` / `AlarmLogger::ackAlarms()` | 原来 Ctrl 多选也只确认最后一条；改为 `selectedRows()` 收集全部选中行，单选走 `ackAlarm`、多选走批量 `ackAlarms` |
+| 批量确认接口（新增） | `AlarmLogger::ackAlarms(const QList<qint64> &ids)` | 事务批量 `UPDATE alarms SET acked=1 WHERE id IN (...)`；与单条一致返回 `bool`，空列表幂等返回 `true` |
+
+### 8.2 验收方法（对应第4周要求）
+
+**任务 1：解耦验证（通信类不依赖 UI）**
+```
+1. 启动 demo，点「连接」→ CONNECTED，心跳 ok
+2. 点「模拟:闪断」→ 立即断开 → 马上重连成功
+   （UI 不关心"断开/重连"内部细节，只通过 stateChanged/logMessage 信号展示）
+3. 将 MainWindow 删除、换成控制台 main()，ModbusManager + AlarmLogger 可独立工作
+```
+
+**任务 2：批量 50 条 + 断电恢复（数据不丢）**
+```
+1. 启动 demo → 点「模拟:批量50条」数次，记录当前行数 N（sqlite3 查询:
+   sqlite3 alarms.db 'SELECT COUNT(*) FROM alarms;'）
+2. 终端: kill -9 <pid>（暴力杀进程）
+3. 重启 demo → 再次查询 COUNT(*) → 数据 == 上次写入量，一条不丢
+4. 预期: 重启后条数 ≥ 杀掉前的已提交量（未提交事务可能丢弃，已提交的必在）
+```
+
+**任务 3：暴力杀进程 + 完整性校验**
+```
+1. pkill -9 modbus_tcp_demo（暴力杀）
+2. 重启 demo → 观察 alarms.db / -wal / -shm 三个文件
+   （-wal 保留 → 重启后 SQLite 自动恢复重放）
+3. 校验:
+   sqlite3 alarms.db 'PRAGMA integrity_check;'   # 返回 ok
+   sqlite3 alarms.db 'SELECT COUNT(*) FROM alarms;'  # 数据 ≤ 杀掉前 N
+4. 反复开关 demo 20+ 次 → 程序不崩溃、无请求堆积、内存不涨
+```
+
+**busy 计数回归验证**
+```
+点「压测:塞500请求」→ accepted≈200，busy 数字正常回落（不再出现天文数字）
+```
+
+### 8.3 记录的新坑
+
+> **坑 10：压测 busy 计数器 `quint64` 下溢**
+> 现象：压测后 busy 显示 `18446744073709551615`。
+> 根因：`enqueueRead` 队列满/停止时**同步**以 `ok=false` 触发回调并返回 0；
+> UI 层回调里无条件 `--m_busyReqCount`，但只有 `seq != 0` 才 `++` → 只减不加 → 下溢。
+> 修复：按"入队是否成功"对称计数（回调里 `if (seq != 0) --m_busyReqCount;`），
+> 或直接改用 `m_mgr->pendingCount()`（= pending + inflight）实时展示，彻底消除自维护计数。
+
+> **坑 11：Ctrl 多选确认只生效最后一条**
+> 现象：按住 Ctrl 多选若干报警行，点「确认选中」只有最后点击的行被置为已确认。
+> 根因：原实现只取了 `currentItem()`（当前项），未遍历选中集。
+> 修复：`selectionModel()->selectedRows()` 收集所有选中行 → 单选走 `ackAlarm`，多选走 `ackAlarms`。
+
+> **坑 12：WAL 的 checkpoint 不会截断 -wal 文件**
+> 观察：塞 6000 条后 `-wal` 大小固定（如 4280712 B）不再增长、主库大小不变；
+> 触发 checkpoint（达 1000 帧阈值）后数据合并进主库，但 **-wal 文件本身不截断清零**，
+> 只是逻辑上被覆盖重用。断电后重启，SQLite 自动恢复重放 -wal → 数据不丢。
+> 结论：备份/拷贝要带 -wal；"看到 -wal 还在"不等于数据异常。
+
+---
+
+## 九、文件结构
 
 ```
 modbus_tcp_demo/
@@ -245,6 +314,6 @@ modbus_tcp_demo/
 └── src/
     ├── main.cpp               # 入口：组装通信层 + 存储层 + UI
     ├── modbusmanager.h/.cpp   # 核心通信类（解耦、可复用）
-    ├── alarmlogger.h/.cpp     # 报警日志存储类（SQLite/WAL/事务/滚动）
+    ├── alarmlogger.h/.cpp     # 报警日志存储类（SQLite/WAL/事务/滚动/批量确认）
     └── mainwindow.h/.cpp      # 测试 UI（可整体删除）
 ```
