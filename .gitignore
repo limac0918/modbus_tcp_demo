@@ -1,0 +1,7 @@
+# 编译产物
+gateway
+myClient3
+docker_libs/
+build/
+# 编辑器
+.vscode/
